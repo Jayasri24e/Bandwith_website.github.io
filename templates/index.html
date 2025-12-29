@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Live Bandwidth Tracker</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  body {
+    margin: 0; padding: 0;
+    font-family: 'Poppins', sans-serif;
+    background: linear-gradient(to right, #4facfe, #00f2fe);
+    color: #fff;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    transition: background 0.3s;
+  }
+  body.dark {
+    background: linear-gradient(to right, #232526, #414345);
+    color: #eee;
+  }
+  .card {
+    background: rgba(0,0,0,0.3);
+    border-radius: 15px;
+    padding: 20px;
+    text-align: center;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.3);
+    max-width: 500px;
+    width: 90%;
+  }
+  h1 { margin-bottom: 15px; font-size: 24px; }
+  .metric { margin: 10px 0; }
+  .value { font-size: 1.4em; font-weight: bold; }
+  .label { font-size: 0.9em; color: #e0e0e0; }
+  #last-update { margin-top: 10px; font-size: 0.8em; color: #ddd; }
+  button, select {
+    margin: 5px; padding: 6px 12px;
+    border: none; border-radius: 5px;
+    background: #ffffff55; color: #fff;
+    cursor: pointer;
+  }
+  button:hover, select:hover { background: #ffffff88; }
+  canvas { margin-top: 10px; background: rgba(255,255,255,0.1); border-radius: 8px; }
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>📶 Live Bandwidth Tracker</h1>
+
+  <div class="metric">
+    <div class="label">Upload Speed</div>
+    <div class="value" id="upload">0 KB/s</div>
+  </div>
+  <div class="metric">
+    <div class="label">Download Speed</div>
+    <div class="value" id="download">0 KB/s</div>
+  </div>
+  <div class="metric">
+    <div class="label">Avg Upload</div>
+    <div class="value" id="avg-upload">0 KB/s</div>
+  </div>
+  <div class="metric">
+    <div class="label">Avg Download</div>
+    <div class="value" id="avg-download">0 KB/s</div>
+  </div>
+
+  <canvas id="chart" width="400" height="150"></canvas>
+
+  <div id="last-update">Last update: never</div>
+
+  <div>
+    <button onclick="startMonitoring()">▶ Start</button>
+    <button onclick="stopMonitoring()">⏸ Stop</button>
+    <button onclick="refreshNow()">🔄 Refresh</button>
+    <button onclick="exportCSV()">📥 Export CSV</button>
+    <button onclick="toggleDarkMode()">🌙/☀ Toggle Mode</button>
+  </div>
+
+  <div>
+    Interval:
+    <select id="interval" onchange="changeInterval()">
+      <option value="1000">1s</option>
+      <option value="2000">2s</option>
+      <option value="5000">5s</option>
+    </select>
+    Graph:
+    <select id="graphType" onchange="changeGraphType()">
+      <option value="line">Line</option>
+      <option value="bar">Bar</option>
+    </select>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+let monitoring = false;
+let intervalId = null;
+let intervalMs = 1000;
+let uploadHistory = [], downloadHistory = [];
+let uploadSum = 0, downloadSum = 0;
+
+// Setup chart
+const ctx = document.getElementById('chart').getContext('2d');
+let chart = createChart('line');
+
+function createChart(type) {
+  return new Chart(ctx, {
+    type: type,
+    data: {
+      labels: [],
+      datasets: [
+        { label: 'Upload KB/s', data: [], borderColor: '#00ff99', backgroundColor:'#00ff9955', fill: false },
+        { label: 'Download KB/s', data: [], borderColor: '#ffcc00', backgroundColor:'#ffcc0055', fill: false }
+      ]
+    },
+    options: { scales: { x: { display: false }, y: { beginAtZero: true } } }
+  });
+}
+
+async function fetchBandwidth() {
+  try {
+    const res = await fetch('/api/bandwidth');
+    const data = await res.json();
+    const uploadKB = data.upload / 1024;
+    const downloadKB = data.download / 1024;
+
+    uploadSum += uploadKB;
+    downloadSum += downloadKB;
+    uploadHistory.push(uploadKB);
+    downloadHistory.push(downloadKB);
+
+    document.getElementById('upload').textContent = uploadKB.toFixed(2)+' KB/s';
+    document.getElementById('download').textContent = downloadKB.toFixed(2)+' KB/s';
+    document.getElementById('avg-upload').textContent = (uploadSum/uploadHistory.length).toFixed(2)+' KB/s';
+    document.getElementById('avg-download').textContent = (downloadSum/downloadHistory.length).toFixed(2)+' KB/s';
+
+    const now = new Date().toLocaleTimeString();
+    if(chart.data.labels.length>30){
+      chart.data.labels.shift(); chart.data.datasets[0].data.shift(); chart.data.datasets[1].data.shift();
+    }
+    chart.data.labels.push(now);
+    chart.data.datasets[0].data.push(uploadKB);
+    chart.data.datasets[1].data.push(downloadKB);
+    chart.update();
+
+    document.getElementById('last-update').textContent='Last update: '+now;
+
+    // alert if speed > threshold
+    if(uploadKB>200 || downloadKB>200){
+      alert('⚠ High speed detected! Upload or download > 200 KB/s');
+    }
+
+  } catch(e){ console.error('Error:',e); }
+}
+
+function startMonitoring(){
+  if(!monitoring){
+    intervalId = setInterval(fetchBandwidth, intervalMs);
+    monitoring=true;
+  }
+}
+function stopMonitoring(){
+  clearInterval(intervalId);
+  monitoring=false;
+}
+function refreshNow(){ fetchBandwidth(); }
+function exportCSV(){
+  let csv='Time,Upload(KB/s),Download(KB/s)\n';
+  for(let i=0;i<chart.data.labels.length;i++){
+    csv+=`${chart.data.labels[i]},${chart.data.datasets[0].data[i]},${chart.data.datasets[1].data[i]}\n`;
+  }
+  let blob=new Blob([csv],{type:'text/csv'});
+  let url=URL.createObjectURL(blob);
+  let a=document.createElement('a');
+  a.href=url;a.download='bandwidth.csv';a.click(); URL.revokeObjectURL(url);
+}
+function toggleDarkMode(){
+  document.body.classList.toggle('dark');
+}
+function changeInterval(){
+  intervalMs = parseInt(document.getElementById('interval').value);
+  if(monitoring){ stopMonitoring(); startMonitoring(); }
+}
+function changeGraphType(){
+  let type=document.getElementById('graphType').value;
+  chart.destroy(); chart=createChart(type);
+}
+</script>
+</body>
+</html>
